@@ -54,6 +54,7 @@ build_list = (
     { "target": "NUCLEO_F401RE",     "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "usb", "fat"] },
     { "target": "NUCLEO_F410RB",     "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "fat"] },
     { "target": "NUCLEO_F411RE",     "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "usb", "fat"] },
+    { "target": "NUCLEO_F412ZG",     "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "fat"] },
     { "target": "NUCLEO_L432KC",     "toolchains": "GCC_ARM", "libs": ["dsp", "fat"] },
     { "target": "NUCLEO_L476RG",     "toolchains": "GCC_ARM", "libs": ["dsp", "fat"] },
     { "target": "NUCLEO_L011K4",     "toolchains": "GCC_ARM", "libs": ["dsp"] },
@@ -75,6 +76,7 @@ build_list = (
     { "target": "ARCH_MAX",          "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "fat"] },
 
     { "target": "DISCO_F051R8",      "toolchains": "GCC_ARM", "libs": ["dsp", "fat"] },
+    { "target": "DISCO_F303VC",      "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "fat"] },
     { "target": "DISCO_F334C8",      "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "fat"] },
     { "target": "DISCO_F401VC",      "toolchains": "GCC_ARM", "libs": ["dsp", "fat"] },
     { "target": "DISCO_F407VG",      "toolchains": "GCC_ARM", "libs": ["dsp", "rtos", "usb", "fat"] },

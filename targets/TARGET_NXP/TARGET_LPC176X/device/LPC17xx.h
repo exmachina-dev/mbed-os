@@ -653,12 +653,13 @@ typedef struct
   __IO uint32_t VELCOMP;
   __IO uint32_t FILTER;
        uint32_t RESERVED0[998];
-  __O  uint32_t QEIIEC;
-  __O  uint32_t QEIIES;
   __I  uint32_t QEIINTSTAT;
   __I  uint32_t QEIIE;
   __O  uint32_t QEICLR;
   __O  uint32_t QEISET;
+       uint32_t RESERVED1[3];
+  __O  uint32_t QEIIEC;
+  __O  uint32_t QEIIES;
 } LPC_QEI_TypeDef;
 
 /*------------- Controller Area Network (CAN) --------------------------------*/

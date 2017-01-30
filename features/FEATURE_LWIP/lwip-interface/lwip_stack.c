@@ -103,7 +103,9 @@ static void mbed_lwip_socket_callback(struct netconn *nc, enum netconn_evt eh, u
 
 /* TCP/IP and Network Interface Initialisation */
 static struct netif lwip_netif;
+#if LWIP_DHCP
 static bool lwip_dhcp = false;
+#endif
 static char lwip_mac_address[NSAPI_MAC_SIZE];
 
 #if !LWIP_IPV4 || !LWIP_IPV6
@@ -420,6 +422,12 @@ nsapi_error_t mbed_lwip_bringup(bool dhcp, const char *ip, const char *netmask, 
         return NSAPI_ERROR_PARAMETER;
     }
 
+#if !LWIP_DHCP
+    if (dhcp) {
+        return NSAPI_ERROR_PARAMETER;
+    }
+#endif
+
     if(mbed_lwip_init(NULL) != NSAPI_ERROR_OK) {
         return NSAPI_ERROR_DEVICE_ERROR;
     }
@@ -477,7 +485,7 @@ nsapi_error_t mbed_lwip_bringup(bool dhcp, const char *ip, const char *netmask, 
 
     netif_set_up(&lwip_netif);
 
-#if LWIP_IPV4
+#if LWIP_IPV4 && LWIP_DHCP
     // Connect to the network
     lwip_dhcp = dhcp;
 
@@ -529,7 +537,7 @@ nsapi_error_t mbed_lwip_bringdown(void)
         return NSAPI_ERROR_PARAMETER;
     }
 
-#if LWIP_IPV4
+#if LWIP_IPV4 && LWIP_DNS
     // Disconnect from the network
     if (lwip_dhcp) {
         dhcp_release(&lwip_netif);
@@ -576,6 +584,7 @@ static nsapi_error_t mbed_lwip_err_remap(err_t err) {
     }
 }
 
+#if LWIP_DNS
 /* LWIP network stack implementation */
 static nsapi_error_t mbed_lwip_gethostbyname(nsapi_stack_t *stack, const char *host, nsapi_addr_t *addr, nsapi_version_t version)
 {
@@ -617,6 +626,7 @@ static nsapi_error_t mbed_lwip_gethostbyname(nsapi_stack_t *stack, const char *h
 
     return 0;
 }
+#endif
 
 static nsapi_error_t mbed_lwip_socket_open(nsapi_stack_t *stack, nsapi_socket_t *handle, nsapi_protocol_t proto)
 {
@@ -885,7 +895,9 @@ static void mbed_lwip_socket_attach(nsapi_stack_t *stack, nsapi_socket_t handle,
 
 /* LWIP network stack */
 const nsapi_stack_api_t lwip_stack_api = {
+#if LWIP_DNS
     .gethostbyname      = mbed_lwip_gethostbyname,
+#endif
     .socket_open        = mbed_lwip_socket_open,
     .socket_close       = mbed_lwip_socket_close,
     .socket_bind        = mbed_lwip_socket_bind,

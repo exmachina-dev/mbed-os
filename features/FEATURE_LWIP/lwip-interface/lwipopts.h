@@ -157,8 +157,18 @@
 #define TCP_QUEUE_OOSEQ             0
 #define TCP_OVERSIZE                0
 
+#ifndef MBED_CONF_LWIP_DHCP
 #define LWIP_DHCP                   LWIP_IPV4
+#else
+#define LWIP_DHCP                   MBED_CONF_LWIP_DHCP
+#endif
+
+#ifndef MBED_CONF_LWIP_DNS
 #define LWIP_DNS                    1
+#else
+#define LWIP_DNS                    MBED_CONF_LWIP_DNS
+#endif
+
 #define LWIP_SOCKET                 0
 
 #define SO_REUSE                    1

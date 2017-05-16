@@ -16,15 +16,15 @@
 #ifndef MBED_CIRCULARBUFFER_H
 #define MBED_CIRCULARBUFFER_H
 
-#include "platform/critical.h"
+#include "platform/mbed_critical.h"
 
 namespace mbed {
 /** \addtogroup platform */
-/** @{*/
 
 /** Templated Circular buffer class
  *
- *  @Note Synchronization level: Interrupt safe
+ *  @note Synchronization level: Interrupt safe
+ *  @ingroup platform
  */
 template<typename T, uint32_t BufferSize, typename CounterType = uint32_t>
 class CircularBuffer {
@@ -116,4 +116,3 @@ private:
 
 #endif
 
-/** @}*/

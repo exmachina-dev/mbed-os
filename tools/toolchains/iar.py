@@ -26,7 +26,7 @@ class IAR(mbedToolchain):
     LINKER_EXT = '.icf'
     STD_LIB_NAME = "%s.a"
 
-    DIAGNOSTIC_PATTERN = re.compile('"(?P<file>[^"]+)",(?P<line>[\d]+)\s+(?P<severity>Warning|Error)(?P<message>.+)')
+    DIAGNOSTIC_PATTERN = re.compile('"(?P<file>[^"]+)",(?P<line>[\d]+)\s+(?P<severity>Warning|Error|Fatal error)(?P<message>.+)')
     INDEX_PATTERN  = re.compile('(?P<col>\s*)\^')
 
     @staticmethod
@@ -37,8 +37,10 @@ class IAR(mbedToolchain):
         return mbedToolchain.generic_check_executable("IAR", 'iccarm', 2, "bin")
 
     def __init__(self, target, notify=None, macros=None,
-                 silent=False, extra_verbose=False, build_profile=None):
+                 silent=False, extra_verbose=False, build_profile=None,
+                 build_dir=None):
         mbedToolchain.__init__(self, target, notify, macros, silent,
+                               build_dir=build_dir,
                                extra_verbose=extra_verbose,
                                build_profile=build_profile)
         if target.core == "Cortex-M7F" or target.core == "Cortex-M7FD":
@@ -222,8 +224,10 @@ class IAR(mbedToolchain):
 
     @hook_tool
     def binary(self, resources, elf, bin):
+        _, fmt = splitext(bin)
+        bin_arg = {".bin": "--bin", ".hex": "--ihex"}[fmt]
         # Build binary command
-        cmd = [self.elf2bin, "--bin", elf, bin]
+        cmd = [self.elf2bin, bin_arg, elf, bin]
 
         # Call cmdline hook
         cmd = self.hook.get_cmdline_binary(cmd)
@@ -231,3 +235,15 @@ class IAR(mbedToolchain):
         # Exec command
         self.cc_verbose("FromELF: %s" % ' '.join(cmd))
         self.default_cmd(cmd)
+
+    @staticmethod
+    def name_mangle(name):
+        return "_Z%i%sv" % (len(name), name)
+
+    @staticmethod
+    def make_ld_define(name, value):
+        return "--config_def %s=0x%x" % (name, value)
+
+    @staticmethod
+    def redirect_symbol(source, sync, build_dir):
+        return "--redirect %s=%s" % (source, sync)

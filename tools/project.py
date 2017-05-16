@@ -12,7 +12,7 @@ from os.path import normpath, realpath
 
 from tools.paths import EXPORT_DIR, MBED_HAL, MBED_LIBRARIES, MBED_TARGETS_PATH
 from tools.settings import BUILD_DIR
-from tools.export import EXPORTERS, mcu_ide_matrix
+from tools.export import EXPORTERS, mcu_ide_matrix, mcu_ide_list, export_project, get_exporter_toolchain
 from tools.tests import TESTS, TEST_MAP
 from tools.tests import test_known, test_name_known, Test
 from tools.targets import TARGET_NAMES
@@ -20,7 +20,6 @@ from tools.utils import argparse_filestring_type, argparse_profile_filestring_ty
 from tools.utils import argparse_force_lowercase_type
 from tools.utils import argparse_force_uppercase_type
 from tools.utils import print_large_string
-from tools.project_api import export_project, get_exporter_toolchain
 from tools.options import extract_profile, list_profiles
 
 def setup_project(ide, target, program=None, source_dir=None, build=None, export_path=None):
@@ -106,14 +105,12 @@ def main():
 
     parser.add_argument("-m", "--mcu",
                         metavar="MCU",
-                        default='LPC1768',
                         type=argparse_force_uppercase_type(targetnames, "MCU"),
                         help="generate project for the given MCU ({})".format(
                             ', '.join(targetnames)))
 
     parser.add_argument("-i",
                         dest="ide",
-                        default='uvision',
                         type=argparse_force_lowercase_type(
                             toolchainlist, "toolchain"),
                         help="The target IDE: %s"% str(toolchainlist))
@@ -148,9 +145,11 @@ def main():
                        help="list available programs in order and exit")
 
     group.add_argument("-S", "--list-matrix",
-                       action="store_true",
                        dest="supported_ides",
                        default=False,
+                       const="matrix",
+                       choices=["matrix", "ides"],
+                       nargs="?",
                        help="displays supported matrix of MCUs and IDEs")
 
     parser.add_argument("-E",
@@ -191,7 +190,10 @@ def main():
 
     # Only prints matrix of supported IDEs
     if options.supported_ides:
-        print_large_string(mcu_ide_matrix())
+        if options.supported_ides == "matrix":
+            print_large_string(mcu_ide_matrix())
+        elif options.supported_ides == "ides":
+            print mcu_ide_list()
         exit(0)
 
     # Only prints matrix of supported IDEs
@@ -215,14 +217,6 @@ def main():
         cache = Cache(True, True)
         cache.cache_descriptors()
 
-    # Clean Export Directory
-    if options.clean:
-        if exists(EXPORT_DIR):
-            rmtree(EXPORT_DIR)
-
-    for mcu in options.mcu:
-        zip_proj = not bool(options.source_dir)
-
     # Target
     if not options.mcu:
         args_error(parser, "argument -m/--mcu is required")
@@ -231,13 +225,21 @@ def main():
     if not options.ide:
         args_error(parser, "argument -i is required")
 
+    # Clean Export Directory
+    if options.clean:
+        if exists(EXPORT_DIR):
+            rmtree(EXPORT_DIR)
+
+    for mcu in options.mcu:
+        zip_proj = not bool(options.source_dir)
+
     if (options.program is None) and (not options.source_dir):
         args_error(parser, "one of -p, -n, or --source is required")
         # Export to selected toolchain
     exporter, toolchain_name = get_exporter_toolchain(options.ide)
     if options.mcu not in exporter.TARGETS:
         args_error(parser, "%s not supported by %s"%(options.mcu,options.ide))
-    profile = extract_profile(parser, options, toolchain_name)
+    profile = extract_profile(parser, options, toolchain_name, fallback="debug")
     if options.clean:
         rmtree(BUILD_DIR)
     export(options.mcu, options.ide, build=options.build,

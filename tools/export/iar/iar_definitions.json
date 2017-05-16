@@ -5,6 +5,9 @@
     "LPC11U24FBD48/401": {
         "OGChipSelectEditMenu": "LPC11U24FBD64_401\tNXP LPC11U24FBD64_401"
     },
+    "STM32F207ZG": {
+         "OGChipSelectEditMenu": "STM32F207ZG\tST STM32F207ZG"
+    },
     "STM32F334R8": {
         "OGChipSelectEditMenu": "STM32F334x8\tST STM32F334x8"
     },
@@ -39,7 +42,10 @@
         "OGChipSelectEditMenu": "STM32F072RB\tST STM32F072RB"
     },
     "nRF51822_xxAA": {
-        "OGChipSelectEditMenu": "nRF51822-QFAA\tNordicSemi nRF51822-QFAA"
+        "OGChipSelectEditMenu": "nRF51822-QFAA\tNordicSemi nRF51822-QFAA",
+        "CExtraOptionsCheck": 1,
+        "CExtraOptions": "--drv_vector_table_base=0x0",
+        "CMSISDAPJtagSpeedList": 10
     },
     "EFM32GG990F1024": {
         "OGChipSelectEditMenu": "EFM32GG990F1024\tSiliconLaboratories EFM32GG990F1024"
@@ -67,6 +73,9 @@
     },
     "STM32F446RE": {
         "OGChipSelectEditMenu": "STM32F446RE\tST STM32F446RE"
+    },
+    "STM32L072CZ": {
+        "OGChipSelectEditMenu": "STM32L072CZ\tST STM32L072CZ"
     },
     "STM32L073RZ": {
         "OGChipSelectEditMenu": "STM32L073RZ\tST STM32L073RZ"
@@ -133,8 +142,15 @@
     "STM32F091RC": {
         "OGChipSelectEditMenu": "STM32F091RC\tST STM32F091RC"
     },
-    "r7s721001": {
+    "RZ_A1H": {
         "OGChipSelectEditMenu": "R7S721001\tRenesas R7S721001",
+        "CoreVariant": 37,
+        "GFPUCoreSlave": 37,
+        "GBECoreSlave": 37,
+        "NEON":1
+    },
+    "VK_RZ_A1H": {
+        "OGChipSelectEditMenu": "R7S721000\tRenesas R7S721000",
         "CoreVariant": 37,
         "GFPUCoreSlave": 37,
         "GBECoreSlave": 37,
@@ -146,16 +162,25 @@
     "STM32F031K6": {
         "OGChipSelectEditMenu": "STM32F031x6\tST STM32F031x6"
     },
-    "max326000x85": {
+    "MAX32600MBED": {
         "OGChipSelectEditMenu": "MAX32600x85\tMaxim MAX32600x85"
     },
     "STM32F407VG": {
         "OGChipSelectEditMenu": "STM32F407VG\tST STM32F407VG"
     },
     "nRF52832_xxAA":{
-        "OGChipSelectEditMenu": "nRF52832-xxAA\tNordicSemi nRF52832-xxAA"
+        "OGChipSelectEditMenu": "nRF52832-xxAA\tNordicSemi nRF52832-xxAA",
+        "CExtraOptionsCheck": 1,
+        "CExtraOptions": "--drv_vector_table_base=0x0",
+        "CMSISDAPJtagSpeedList": 10
     },
     "NCS36510":{
         "OGChipSelectEditMenu": "NCS36510\tONSemiconductor NCS36510"
+    },
+    "NUC472HI8AE": {
+        "OGChipSelectEditMenu": "NUC400AE series\tNuvoton NUC400AE series (NUC442AE,NUC472AE)"
+    },
+    "M453VG6AE": {
+        "OGChipSelectEditMenu": "M451AE series\tNuvoton M451AE series (M451AE,M452AE,M453AE,M451MAE)"
     }
 }

@@ -80,18 +80,28 @@
 #define DEFAULT_RAW_RECVMBOX_SIZE   8
 #define DEFAULT_ACCEPTMBOX_SIZE     8
 
+// Thread stack size for lwip tcpip thread
+#ifndef MBED_CONF_LWIP_TCPIP_THREAD_STACKSIZE
+#define MBED_CONF_LWIP_TCPIP_THREAD_STACKSIZE      1200
+#endif
+
 #ifdef LWIP_DEBUG
-#define TCPIP_THREAD_STACKSIZE      1200*2
+#define TCPIP_THREAD_STACKSIZE      MBED_CONF_LWIP_TCPIP_THREAD_STACKSIZE*2
 #else
-#define TCPIP_THREAD_STACKSIZE      1200
+#define TCPIP_THREAD_STACKSIZE      MBED_CONF_LWIP_TCPIP_THREAD_STACKSIZE
 #endif
 
 #define TCPIP_THREAD_PRIO           (osPriorityNormal)
 
+// Thread stack size for lwip system threads
+#ifndef MBED_CONF_LWIP_DEFAULT_THREAD_STACKSIZE
+#define MBED_CONF_LWIP_DEFAULT_THREAD_STACKSIZE    512
+#endif
+
 #ifdef LWIP_DEBUG
-#define DEFAULT_THREAD_STACKSIZE    512*2
+#define DEFAULT_THREAD_STACKSIZE    MBED_CONF_LWIP_DEFAULT_THREAD_STACKSIZE*2
 #else
-#define DEFAULT_THREAD_STACKSIZE    512
+#define DEFAULT_THREAD_STACKSIZE    MBED_CONF_LWIP_DEFAULT_THREAD_STACKSIZE
 #endif
 
 #define MEMP_NUM_SYS_TIMEOUT        16
@@ -176,7 +186,7 @@
 // Support Multicast
 #include "stdlib.h"
 #define LWIP_IGMP                   LWIP_IPV4
-#define LWIP_RAND()                 rand()
+#define LWIP_RAND()                 lwip_get_random()
 
 #define LWIP_COMPAT_SOCKETS         0
 #define LWIP_POSIX_SOCKETS_IO_NAMES 0
@@ -244,8 +254,8 @@
 #if LWIP_TRANSPORT_ETHERNET
 
 // Broadcast
-#define IP_SOF_BROADCAST            1
-#define IP_SOF_BROADCAST_RECV       1
+#define IP_SOF_BROADCAST            0
+#define IP_SOF_BROADCAST_RECV       0
 
 #define LWIP_BROADCAST_PING         1
 
@@ -273,6 +283,14 @@
 
 #else
 #error A transport mechanism (Ethernet or PPP) must be defined
+#endif
+
+#include <lwip/arch.h>
+#include "lwip_random.h"
+#include "lwip_tcp_isn.h"
+#define LWIP_HOOK_TCP_ISN lwip_hook_tcp_isn
+#if MBEDTLS_MD5_C
+#define LWIP_USE_EXTERNAL_MBEDTLS 1
 #endif
 
 #endif /* LWIPOPTS_H_ */

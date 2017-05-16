@@ -19,15 +19,15 @@
 #include "platform/platform.h"
 
 #include "hal/gpio_api.h"
-#include "platform/critical.h"
+#include "platform/mbed_critical.h"
 
 namespace mbed {
 /** \addtogroup drivers */
-/** @{*/
 
 /** A digital input/output, used for setting or reading a bi-directional pin
  *
- * @Note Synchronization level: Interrupt safe
+ * @note Synchronization level: Interrupt safe
+ * @ingroup drivers
  */
 class DigitalInOut {
 
@@ -92,7 +92,7 @@ public:
 
     /** Set the input pin mode
      *
-     *  @param mode PullUp, PullDown, PullNone, OpenDrain
+     *  @param pull PullUp, PullDown, PullNone, OpenDrain
      */
     void mode(PinMode pull) {
         core_util_critical_section_enter();
@@ -140,5 +140,3 @@ protected:
 } // namespace mbed
 
 #endif
-
-/** @}*/

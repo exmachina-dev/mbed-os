@@ -15,10 +15,10 @@
  */
 #include <stdio.h>
 #include "hal/gpio_api.h"
-#include "platform/wait_api.h"
-#include "platform/toolchain.h"
+#include "platform/mbed_wait_api.h"
+#include "platform/mbed_toolchain.h"
 #include "platform/mbed_interface.h"
-#include "platform/critical.h"
+#include "platform/mbed_critical.h"
 #include "hal/serial_api.h"
 
 #if DEVICE_SERIAL
@@ -75,16 +75,28 @@ void mbed_error_printf(const char* format, ...) {
 
 void mbed_error_vfprintf(const char * format, va_list arg) {
 #if DEVICE_SERIAL
+#define ERROR_BUF_SIZE      (128)
     core_util_critical_section_enter();
-    char buffer[128];
-    int size = vsprintf(buffer, format, arg);
+    char buffer[ERROR_BUF_SIZE];
+    int size = vsnprintf(buffer, ERROR_BUF_SIZE, format, arg);
     if (size > 0) {
         if (!stdio_uart_inited) {
-        serial_init(&stdio_uart, STDIO_UART_TX, STDIO_UART_RX);
+            serial_init(&stdio_uart, STDIO_UART_TX, STDIO_UART_RX);
         }
+#if MBED_CONF_PLATFORM_STDIO_CONVERT_NEWLINES
+        char stdio_out_prev = '\0';
+        for (int i = 0; i < size; i++) {
+            if (buffer[i] == '\n' && stdio_out_prev != '\r') {
+                 serial_putc(&stdio_uart, '\r');
+            }
+            serial_putc(&stdio_uart, buffer[i]);
+            stdio_out_prev = buffer[i];
+        }
+#else
         for (int i = 0; i < size; i++) {
             serial_putc(&stdio_uart, buffer[i]);
         }
+#endif
     }
     core_util_critical_section_exit();
 #endif

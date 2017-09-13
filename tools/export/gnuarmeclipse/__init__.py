@@ -33,7 +33,7 @@ from os.path import splitext, basename, relpath, dirname, exists, join, dirname
 from random import randint
 from json import load
 
-from tools.export.exporters import Exporter, filter_supported
+from tools.export.exporters import Exporter, apply_supported_whitelist
 from tools.options import list_profiles
 from tools.targets import TARGET_MAP
 from tools.utils import NotSupportedException
@@ -69,7 +69,11 @@ class GNUARMEclipse(Exporter):
     NAME = 'GNU ARM Eclipse'
     TOOLCHAIN = 'GCC_ARM'
 
-    TARGETS = filter_supported("GCC_ARM", POST_BINARY_WHITELIST)
+    @classmethod
+    def is_target_supported(cls, target_name):
+        target = TARGET_MAP[target_name]
+        return apply_supported_whitelist(
+            cls.TOOLCHAIN, POST_BINARY_WHITELIST, target)
 
     # override
     @property
@@ -202,14 +206,13 @@ class GNUARMEclipse(Exporter):
             print 'Build configuration: {0}'.format(opts['name'])
 
             profile = profiles[id]
-            profile_toolchain = profile[self.TOOLCHAIN]
 
             # A small hack, do not bother with src_path again,
             # pass an empty string to avoid crashing.
             src_paths = ['']
             target_name = self.toolchain.target.name
             toolchain = prepare_toolchain(
-                src_paths, "", target_name, self.TOOLCHAIN, build_profile=profile_toolchain)
+                src_paths, "", target_name, self.TOOLCHAIN, build_profile=[profile])
 
             # Hack to fill in build_dir
             toolchain.build_dir = self.toolchain.build_dir
@@ -416,105 +419,10 @@ class GNUARMEclipse(Exporter):
         """
         source_folders = [self.filter_dot(s) for s in set(dirname(
             src) for src in self.resources.c_sources + self.resources.cpp_sources + self.resources.s_sources)]
-        if '.' in source_folders:
-            source_folders.remove('.')
 
-        # print 'source folders'
-        # print source_folders
-
-        # Source folders were converted before and are guaranteed to
-        # use the POSIX separator.
-        top_folders = [f for f in set(s.split('/')[0]
-                                      for s in source_folders)]
-        # print 'top folders'
-        # print top_folders
-
-        self.source_tree = {}
-        for top_folder in top_folders:
-            for root, dirs, files in os.walk(top_folder, topdown=True):
-                # print root, dirs, files
-
-                # Paths returned by os.walk() must be split with os.dep
-                # to accomodate Windows weirdness.
-                parts = root.split(os.sep)
-
-                # Ignore paths that include parts starting with dot.
-                skip = False
-                for part in parts:
-                    if part.startswith('.'):
-                        skip = True
-                        break
-                if skip:
-                    continue
-
-                # Further process only leaf paths, (that do not have
-                # sub-folders).
-                if len(dirs) == 0:
-                    # The path is reconstructed using POSIX separators.
-                    self.add_source_folder_to_tree('/'.join(parts))
-
-        for folder in source_folders:
-            self.add_source_folder_to_tree(folder, True)
-
-        # print
-        # print self.source_tree
-        # self.dump_paths(self.source_tree)
-        # self.dump_tree(self.source_tree)
-
-        # print 'excludings'
-        self.excluded_folders = ['BUILD']
-        self.recurse_excludings(self.source_tree)
-
+        self.excluded_folders = set(self.resources.ignored_dirs) - set(self.resources.inc_dirs)
         print 'Source folders: {0}, with {1} exclusions'.format(len(source_folders), len(self.excluded_folders))
 
-    def add_source_folder_to_tree(self, path, is_used=False):
-        """
-        Decompose a path in an array of folder names and create the tree.
-        On the second pass the nodes should be already there; mark them
-        as used.
-        """
-        # print path, is_used
-
-        # All paths arriving here are guaranteed to use the POSIX
-        # separators, os.walk() paths were also explicitly converted.
-        parts = path.split('/')
-        # print parts
-        node = self.source_tree
-        prev = None
-        for part in parts:
-            if part not in node.keys():
-                new_node = {}
-                new_node['name'] = part
-                new_node['children'] = {}
-                if prev != None:
-                    new_node['parent'] = prev
-                node[part] = new_node
-            node[part]['is_used'] = is_used
-            prev = node[part]
-            node = node[part]['children']
-
-    def recurse_excludings(self, nodes):
-        """
-        Recurse the tree and collect all unused folders; descend
-        the hierarchy only for used nodes.
-        """
-        for k in nodes.keys():
-            node = nodes[k]
-            if node['is_used'] == False:
-                parts = []
-                cnode = node
-                while True:
-                    parts.insert(0, cnode['name'])
-                    if 'parent' not in cnode:
-                        break
-                    cnode = cnode['parent']
-
-                # Compose a POSIX path.
-                path = '/'.join(parts)
-                # print path
-                self.excluded_folders.append(path)
-            else:
-                self.recurse_excludings(node['children'])
 
     # -------------------------------------------------------------------------
 

@@ -55,7 +55,7 @@ struct port_s {
 };
 
 struct analogin_s {
-    ADCName adc;
+    ADC_HandleTypeDef handle;
     PinName pin;
     uint8_t channel;
 };
@@ -63,6 +63,7 @@ struct analogin_s {
 struct dac_s {
     DACName dac;
     uint8_t channel;
+    DAC_HandleTypeDef handle;
 };
 
 struct serial_s {

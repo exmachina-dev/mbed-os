@@ -331,7 +331,7 @@ def prepare_toolchain(src_paths, build_dir, target, toolchain_name,
     extra_verbose - even more output!
     config - a Config object to use instead of creating one
     app_config - location of a chosen mbed_app.json file
-    build_profile - a dict of flags that will be passed to the compiler
+    build_profile - a list of mergeable build profiles
     """
 
     # We need to remove all paths which are repeated to avoid
@@ -345,12 +345,17 @@ def prepare_toolchain(src_paths, build_dir, target, toolchain_name,
         cur_tc = TOOLCHAIN_CLASSES[toolchain_name]
     except KeyError:
         raise KeyError("Toolchain %s not supported" % toolchain_name)
-    if config.has_regions:
-        add_regions_to_profile(build_profile, config, cur_tc)
 
-    # Toolchain instance
+    profile = {'c': [], 'cxx': [], 'common': [], 'asm': [], 'ld': []}
+    for contents in build_profile or []:
+        for key in profile:
+            profile[key].extend(contents[toolchain_name][key])
+
+    if config.has_regions:
+        add_regions_to_profile(profile, config, cur_tc)
+
     toolchain = cur_tc(target, notify, macros, silent, build_dir=build_dir,
-                       extra_verbose=extra_verbose, build_profile=build_profile)
+                       extra_verbose=extra_verbose, build_profile=profile)
 
     toolchain.config = config
     toolchain.jobs = jobs
@@ -395,7 +400,7 @@ def merge_region_list(region_list, destination, padding=b'\xFF'):
         merged.tofile(output, format='bin')
 
 def scan_resources(src_paths, toolchain, dependencies_paths=None,
-                   inc_dirs=None, base_path=None):
+                   inc_dirs=None, base_path=None, collect_ignores=False):
     """ Scan resources using initialized toolcain
 
     Positional arguments
@@ -407,9 +412,11 @@ def scan_resources(src_paths, toolchain, dependencies_paths=None,
     """
 
     # Scan src_path
-    resources = toolchain.scan_resources(src_paths[0], base_path=base_path)
+    resources = toolchain.scan_resources(src_paths[0], base_path=base_path,
+                                         collect_ignores=collect_ignores)
     for path in src_paths[1:]:
-        resources.add(toolchain.scan_resources(path, base_path=base_path))
+        resources.add(toolchain.scan_resources(path, base_path=base_path,
+                                               collect_ignores=collect_ignores))
 
     # Scan dependency paths for include dirs
     if dependencies_paths is not None:
@@ -439,7 +446,7 @@ def build_project(src_paths, build_path, target, toolchain_name,
                   macros=None, inc_dirs=None, jobs=1, silent=False,
                   report=None, properties=None, project_id=None,
                   project_description=None, extra_verbose=False, config=None,
-                  app_config=None, build_profile=None):
+                  app_config=None, build_profile=None, stats_depth=None):
     """ Build a project. A project may be a test or a user program.
 
     Positional arguments:
@@ -468,6 +475,7 @@ def build_project(src_paths, build_path, target, toolchain_name,
     config - a Config object to use instead of creating one
     app_config - location of a chosen mbed_app.json file
     build_profile - a dict of flags that will be passed to the compiler
+    stats_depth - depth level for memap to display file/dirs
     """
 
     # Convert src_path to a list if needed
@@ -478,12 +486,10 @@ def build_project(src_paths, build_path, target, toolchain_name,
         src_paths.extend(libraries_paths)
         inc_dirs.extend(map(dirname, libraries_paths))
 
-    # Build Directory
     if clean and exists(build_path):
         rmtree(build_path)
     mkdir(build_path)
 
-    # Pass all params to the unified prepare_toolchain()
     toolchain = prepare_toolchain(
         src_paths, build_path, target, toolchain_name, macros=macros,
         clean=clean, jobs=jobs, notify=notify, silent=silent, verbose=verbose,
@@ -513,6 +519,17 @@ def build_project(src_paths, build_path, target, toolchain_name,
     try:
         # Call unified scan_resources
         resources = scan_resources(src_paths, toolchain, inc_dirs=inc_dirs)
+        if  (hasattr(toolchain.target, "release_versions") and
+             "5" not in toolchain.target.release_versions and
+             "rtos" in toolchain.config.lib_config_data):
+            if "Cortex-A" in toolchain.target.core:
+                raise NotSupportedException(
+                    ("%s Will be supported in mbed OS 5.6. "
+                     "To use the %s, please checkout the mbed OS 5.4 release branch. "
+                     "See https://developer.mbed.org/platforms/Renesas-GR-PEACH/#important-notice "
+                     "for more information") % (toolchain.target.name, toolchain.target.name))
+            else:
+                raise NotSupportedException("Target does not support mbed OS 5")
 
         # Change linker script if specified
         if linker_script is not None:
@@ -537,18 +554,18 @@ def build_project(src_paths, build_path, target, toolchain_name,
         memap_table = ''
         if memap_instance:
             # Write output to stdout in text (pretty table) format
-            memap_table = memap_instance.generate_output('table')
+            memap_table = memap_instance.generate_output('table', stats_depth)
 
             if not silent:
                 print memap_table
 
             # Write output to file in JSON format
             map_out = join(build_path, name + "_map.json")
-            memap_instance.generate_output('json', map_out)
+            memap_instance.generate_output('json', stats_depth, map_out)
 
             # Write output to file in CSV format for the CI
             map_csv = join(build_path, name + "_map.csv")
-            memap_instance.generate_output('csv-ci', map_csv)
+            memap_instance.generate_output('csv-ci', stats_depth, map_csv)
 
         resources.detect_duplicates(toolchain)
 
@@ -557,7 +574,7 @@ def build_project(src_paths, build_path, target, toolchain_name,
             cur_result["elapsed_time"] = end - start
             cur_result["output"] = toolchain.get_output() + memap_table
             cur_result["result"] = "OK"
-            cur_result["memory_usage"] = toolchain.map_outputs
+            cur_result["memory_usage"] = memap_instance.mem_report
             cur_result["bin"] = res
             cur_result["elf"] = splitext(res)[0] + ".elf"
             cur_result.update(toolchain.report)
@@ -978,7 +995,7 @@ def build_mbed_libs(target, toolchain_name, verbose=False,
         mkdir(tmp_path)
 
         toolchain = prepare_toolchain(
-            [""], tmp_path, target, toolchain_name, macros=macros,
+            [""], tmp_path, target, toolchain_name, macros=macros,verbose=verbose,
             notify=notify, silent=silent, extra_verbose=extra_verbose,
             build_profile=build_profile, jobs=jobs, clean=clean)
 
@@ -1047,7 +1064,7 @@ def build_mbed_libs(target, toolchain_name, verbose=False,
         #                       weak SDK functions
         #   - mbed_main.o: this contains main redirection
         separate_names, separate_objects = ['mbed_retarget.o', 'mbed_board.o',
-                                            'mbed_overrides.o', 'mbed_main.o'], []
+                                            'mbed_overrides.o', 'mbed_main.o', 'mbed_sdk_boot.o'], []
 
         for obj in objects:
             for name in separate_names:
@@ -1147,7 +1164,7 @@ def mcu_toolchain_list(release_version='5'):
 
 
 def mcu_target_list(release_version='5'):
-    """  Shows target list 
+    """  Shows target list
 
     """
 
@@ -1307,7 +1324,7 @@ def print_build_memory_usage(report):
     """
     from prettytable import PrettyTable
     columns_text = ['name', 'target', 'toolchain']
-    columns_int = ['static_ram', 'stack', 'heap', 'total_ram', 'total_flash']
+    columns_int = ['static_ram', 'total_flash']
     table = PrettyTable(columns_text + columns_int)
 
     for col in columns_text:
@@ -1334,10 +1351,6 @@ def print_build_memory_usage(report):
                                 record['toolchain_name'],
                                 record['memory_usage'][-1]['summary'][
                                     'static_ram'],
-                                record['memory_usage'][-1]['summary']['stack'],
-                                record['memory_usage'][-1]['summary']['heap'],
-                                record['memory_usage'][-1]['summary'][
-                                    'total_ram'],
                                 record['memory_usage'][-1]['summary'][
                                     'total_flash'],
                             ]

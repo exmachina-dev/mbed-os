@@ -23,19 +23,15 @@
 #include "platform/PlatformMutex.h"
 #include "platform/mbed_error.h"
 #include "platform/mbed_stats.h"
-#if MBED_CONF_FILESYSTEM_PRESENT
-#include "filesystem/FileSystem.h"
-#include "filesystem/File.h"
-#include "filesystem/Dir.h"
-#endif
+#include "platform/mbed_critical.h"
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #if DEVICE_STDIO_MESSAGES
 #include <stdio.h>
 #endif
 #include <errno.h>
 #include "platform/mbed_retarget.h"
-
 
 #if defined(__ARMCC_VERSION)
 #   include <rt_sys.h>
@@ -76,7 +72,6 @@ extern const char __stdout_name[] = "/stdout";
 extern const char __stderr_name[] = "/stderr";
 #endif
 
-// Heap limits - only used if set
 unsigned char *mbed_heap_start = 0;
 uint32_t mbed_heap_size = 0;
 
@@ -120,7 +115,20 @@ static void init_serial() {
 #endif
 }
 
-#if MBED_CONF_FILESYSTEM_PRESENT
+/**
+ * Sets errno when file opening fails.
+ * Wipes out the filehandle too.
+ *
+ * @param error is a negative error code returned from an mbed function and
+ *              will be negated to store a positive error code in errno
+ */
+static int handle_open_errors(int error, unsigned filehandle_idx) {
+    errno = -error;
+    // Free file handle
+    filehandles[filehandle_idx] = NULL;
+    return -1;
+}
+
 static inline int openmode_to_posix(int openmode) {
     int posix = openmode;
 #ifdef __ARMCC_VERSION
@@ -155,32 +163,6 @@ static inline int openmode_to_posix(int openmode) {
 #endif
     return posix;
 }
-#endif
-
-extern "C" WEAK void mbed_sdk_init(void);
-extern "C" WEAK void mbed_sdk_init(void) {
-}
-
-#if MBED_CONF_FILESYSTEM_PRESENT
-// Internally used file objects with managed memory on close
-class ManagedFile : public File {
-public:
-    virtual int close() {
-        int err = File::close();
-        delete this;
-        return err;
-    }
-};
-
-class ManagedDir : public Dir {
-public:
-     virtual int close() {
-        int err = Dir::close();
-        delete this;
-        return err;
-    }
-};
-#endif
 
 /* @brief 	standard c library fopen() retargeting function.
  *
@@ -189,20 +171,29 @@ public:
  * @return
  *  On success, a valid FILEHANDLE is returned.
  *  On failure, -1 is returned and errno is set to an appropriate value e.g.
- *   EBADF		a bad file descriptor was found (default errno setting)
+ *   ENOENT	    file not found (default errno setting)
  *	 EMFILE		the maximum number of open files was exceeded.
  *
  * */
 extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
     #if defined(__MICROLIB) && (__ARMCC_VERSION>5030000)
+#if !defined(MBED_CONF_RTOS_PRESENT)
+    // valid only for mbed 2
+    // for ulib, this is invoked after RAM init, prior c++
+    // used as hook, as post stack/heap is not active there
+    extern void mbed_copy_nvic(void);
+    extern void mbed_sdk_init(void);
+
+    static int mbed_sdk_inited = 0;
+    if (!mbed_sdk_inited) {
+        mbed_copy_nvic();
+        mbed_sdk_init();
+        mbed_sdk_inited = 1;
+    }
+#endif
     // Before version 5.03, we were using a patched version of microlib with proper names
     // This is the workaround that the microlib author suggested us
     static int n = 0;
-    static int mbed_sdk_inited = 0;
-    if (!mbed_sdk_inited) {
-        mbed_sdk_inited = 1;
-        mbed_sdk_init();
-    }
     if (!std::strcmp(name, ":tt")) return n++;
     #else
     /* Use the posix convention that stdin,out,err are filehandles 0,1,2.
@@ -218,9 +209,6 @@ extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
         return 2;
     }
     #endif
-
-    /* if something goes wrong and errno is not explicly set, errno will be set to EBADF */
-    errno = EBADF;
 
     // find the first empty slot in filehandles
     filehandle_mutex->lock();
@@ -240,10 +228,10 @@ extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
 
     FileHandle *res = NULL;
 
-    /* FILENAME: ":0x12345678" describes a FileHandle* */
+    /* FILENAME: ":(pointer)" describes a FileHandle* */
     if (name[0] == ':') {
         void *p;
-        sscanf(name, ":%p", &p);
+        memcpy(&p, name + 1, sizeof(p));
         res = (FileHandle*)p;
 
     /* FILENAME: "/file_system/file_name" */
@@ -253,41 +241,25 @@ extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
         if (!path.exists()) {
             /* The first part of the filename (between first 2 '/') is not a
              * registered mount point in the namespace.
-             * Free file handle.
              */
-            filehandles[fh_i] = NULL;
-            errno = ENOENT;
-            return -1;
-        } else if (path.isFile()) {
+            return handle_open_errors(-ENOENT, fh_i);
+        }
+
+        if (path.isFile()) {
             res = path.file();
-#if MBED_CONF_FILESYSTEM_PRESENT
         } else {
-            FileSystem *fs = path.fileSystem();
+            FileSystemHandle *fs = path.fileSystem();
             if (fs == NULL) {
-                /* The filesystem instance managing the namespace under the mount point
-                 * has not been found. Free file handle */
-                errno = ENOENT;
-                filehandles[fh_i] = NULL;
-                return -1;
+                return handle_open_errors(-ENOENT, fh_i);
             }
             int posix_mode = openmode_to_posix(openmode);
-            File *file = new ManagedFile;
-            int err = file->open(fs, path.fileName(), posix_mode);
-            if (err < 0) {
-                errno = -err;
-                delete file;
-            } else {
-                res = file;
+            int err = fs->open(&res, path.fileName(), posix_mode);
+            if (err) {
+                return handle_open_errors(err, fh_i);
             }
-#endif
         }
     }
 
-    if (res == NULL) {
-        // Free file handle
-        filehandles[fh_i] = NULL;
-        return -1;
-    }
     filehandles[fh_i] = res;
 
     return fh_i + 3; // +3 as filehandles 0-2 are stdin/out/err
@@ -296,10 +268,12 @@ extern "C" FILEHANDLE PREFIX(_open)(const char* name, int openmode) {
 extern "C" int PREFIX(_close)(FILEHANDLE fh) {
     if (fh < 3) return 0;
 
-    errno = EBADF;
     FileHandle* fhc = filehandles[fh-3];
     filehandles[fh-3] = NULL;
-    if (fhc == NULL) return -1;
+    if (fhc == NULL) {
+        errno = EBADF;
+        return -1;
+    }
 
     int err = fhc->close();
     if (err < 0) {
@@ -317,7 +291,12 @@ extern "C" int PREFIX(_write)(FILEHANDLE fh, const unsigned char *buffer, unsign
 #endif
     int n; // n is the number of bytes written
 
-    errno = EBADF;
+#if defined(MBED_TRAP_ERRORS_ENABLED) && MBED_TRAP_ERRORS_ENABLED && defined(MBED_CONF_RTOS_PRESENT)
+    if (core_util_is_isr_active() || !core_util_are_interrupts_enabled()) {
+        error("Error - writing to a file in an ISR or critical section\r\n");
+    }
+#endif
+
     if (fh < 3) {
 #if DEVICE_SERIAL
         if (!stdio_uart_inited) init_serial();
@@ -338,7 +317,10 @@ extern "C" int PREFIX(_write)(FILEHANDLE fh, const unsigned char *buffer, unsign
         n = length;
     } else {
         FileHandle* fhc = filehandles[fh-3];
-        if (fhc == NULL) return -1;
+        if (fhc == NULL) {
+            errno = EBADF;
+            return -1;
+        }
 
         n = fhc->write(buffer, length);
         if (n < 0) {
@@ -359,7 +341,12 @@ extern "C" int PREFIX(_read)(FILEHANDLE fh, unsigned char *buffer, unsigned int 
 #endif
     int n; // n is the number of bytes read
 
-    errno = EBADF;
+#if defined(MBED_TRAP_ERRORS_ENABLED) && MBED_TRAP_ERRORS_ENABLED && defined(MBED_CONF_RTOS_PRESENT)
+    if (core_util_is_isr_active() || !core_util_are_interrupts_enabled()) {
+        error("Error - reading from a file in an ISR or critical section\r\n");
+    }
+#endif
+
     if (fh < 3) {
         // only read a character at a time from stdin
 #if DEVICE_SERIAL
@@ -390,7 +377,10 @@ extern "C" int PREFIX(_read)(FILEHANDLE fh, unsigned char *buffer, unsigned int 
         n = 1;
     } else {
         FileHandle* fhc = filehandles[fh-3];
-        if (fhc == NULL) return -1;
+        if (fhc == NULL) {
+            errno = EBADF;
+            return -1;
+        }
 
         n = fhc->read(buffer, length);
         if (n < 0) {
@@ -404,57 +394,76 @@ extern "C" int PREFIX(_read)(FILEHANDLE fh, unsigned char *buffer, unsigned int 
 #endif
 }
 
+
 #ifdef __ARMCC_VERSION
 extern "C" int PREFIX(_istty)(FILEHANDLE fh)
 #else
 extern "C" int _isatty(FILEHANDLE fh)
 #endif
 {
-    errno = EBADF;
     /* stdin, stdout and stderr should be tty */
     if (fh < 3) return 1;
 
     FileHandle* fhc = filehandles[fh-3];
-    if (fhc == NULL) return -1;
-
-    int err = fhc->isatty();
-    if (err < 0) {
-        errno = -err;
-        return -1;
-    } else {
+    if (fhc == NULL) {
+        errno = EBADF;
         return 0;
+    }
+
+    int tty = fhc->isatty();
+    if (tty < 0) {
+        errno = -tty;
+        return 0;
+    } else {
+        return tty;
     }
 }
 
 extern "C"
 #if defined(__ARMCC_VERSION)
-int _sys_seek(FILEHANDLE fh, long position)
+int _sys_seek(FILEHANDLE fh, long offset)
 #elif defined(__ICCARM__)
 long __lseek(int fh, long offset, int whence)
 #else
 int _lseek(FILEHANDLE fh, int offset, int whence)
 #endif
 {
-    errno = EBADF;
-    if (fh < 3) return 0;
+#if defined(__ARMCC_VERSION)
+    int whence = SEEK_SET;
+#endif
+    if (fh < 3) {
+        errno = ESPIPE;
+        return -1;
+    }
 
     FileHandle* fhc = filehandles[fh-3];
-    if (fhc == NULL) return -1;
+    if (fhc == NULL) {
+        errno = EBADF;
+        return -1;
+    }
 
-#if defined(__ARMCC_VERSION)
-    return fhc->seek(position, SEEK_SET);
-#else
-    return fhc->seek(offset, whence);
-#endif
+    off_t off = fhc->seek(offset, whence);
+    if (off < 0) {
+        errno = -off;
+        return -1;
+    }
+    // Assuming INT_MAX = LONG_MAX, so we don't care about prototype difference
+    if (off > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return off;
 }
 
 #ifdef __ARMCC_VERSION
 extern "C" int PREFIX(_ensure)(FILEHANDLE fh) {
-    errno = EBADF;
     if (fh < 3) return 0;
 
     FileHandle* fhc = filehandles[fh-3];
-    if (fhc == NULL) return -1;
+    if (fhc == NULL) {
+        errno = EBADF;
+        return -1;
+    }
 
     int err = fhc->sync();
     if (err < 0) {
@@ -466,13 +475,27 @@ extern "C" int PREFIX(_ensure)(FILEHANDLE fh) {
 }
 
 extern "C" long PREFIX(_flen)(FILEHANDLE fh) {
-    errno = EBADF;
-    if (fh < 3) return 0;
+    if (fh < 3) {
+        errno = EINVAL;
+        return -1;
+    }
 
     FileHandle* fhc = filehandles[fh-3];
-    if (fhc == NULL) return -1;
+    if (fhc == NULL) {
+        errno = EBADF;
+        return -1;
+    }
 
-    return fhc->size();
+    off_t size = fhc->size();
+    if (size < 0) {
+        errno = -size;
+        return -1;
+    }
+    if (size > LONG_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return size;
 }
 #endif
 
@@ -490,11 +513,12 @@ extern "C" int _fstat(int fd, struct stat *st) {
 
 namespace std {
 extern "C" int remove(const char *path) {
-#if MBED_CONF_FILESYSTEM_PRESENT
-    errno = EBADF;
     FilePath fp(path);
-    FileSystem *fs = fp.fileSystem();
-    if (fs == NULL) return -1;
+    FileSystemHandle *fs = fp.fileSystem();
+    if (fs == NULL) {
+        errno = ENOENT;
+        return -1;
+    }
 
     int err = fs->remove(fp.fileName());
     if (err < 0) {
@@ -503,22 +527,24 @@ extern "C" int remove(const char *path) {
     } else {
         return 0;
     }
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
 }
 
 extern "C" int rename(const char *oldname, const char *newname) {
-#if MBED_CONF_FILESYSTEM_PRESENT
-    errno = EBADF;
     FilePath fpOld(oldname);
     FilePath fpNew(newname);
-    FileSystem *fsOld = fpOld.fileSystem();
-    FileSystem *fsNew = fpNew.fileSystem();
+    FileSystemHandle *fsOld = fpOld.fileSystem();
+    FileSystemHandle *fsNew = fpNew.fileSystem();
+
+    if (fsOld == NULL) {
+        errno = ENOENT;
+        return -1;
+    }
 
     /* rename only if both files are on the same FS */
-    if (fsOld != fsNew || fsOld == NULL) return -1;
+    if (fsOld != fsNew) {
+        errno = EXDEV;
+        return -1;
+    }
 
     int err = fsOld->rename(fpOld.fileName(), fpNew.fileName());
     if (err < 0) {
@@ -527,10 +553,6 @@ extern "C" int rename(const char *oldname, const char *newname) {
     } else {
         return 0;
     }
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
 }
 
 extern "C" char *tmpnam(char *s) {
@@ -551,30 +573,24 @@ extern "C" char *_sys_command_string(char *cmd, int len) {
 #endif
 
 extern "C" DIR *opendir(const char *path) {
-#if MBED_CONF_FILESYSTEM_PRESENT
-    errno = EBADF;
-
     FilePath fp(path);
-    FileSystem* fs = fp.fileSystem();
-    if (fs == NULL) return NULL;
+    FileSystemHandle* fs = fp.fileSystem();
+    if (fs == NULL) {
+        errno = ENOENT;
+        return NULL;
+    }
 
-    Dir *dir = new ManagedDir;
-    int err = dir->open(fs, fp.fileName());
+    DirHandle *dir;
+    int err = fs->open(&dir, fp.fileName());
     if (err < 0) {
         errno = -err;
-        delete dir;
-        dir = NULL;
+        return NULL;
     }
 
     return dir;
-#else
-    errno = ENOSYS;
-    return 0;
-#endif
 }
 
 extern "C" struct dirent *readdir(DIR *dir) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     static struct dirent ent;
     int err = dir->read(&ent);
     if (err < 1) {
@@ -585,14 +601,9 @@ extern "C" struct dirent *readdir(DIR *dir) {
     }
 
     return &ent;
-#else
-    errno = ENOSYS;
-    return 0;
-#endif
 }
 
 extern "C" int closedir(DIR *dir) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     int err = dir->close();
     if (err < 0) {
         errno = -err;
@@ -600,41 +611,23 @@ extern "C" int closedir(DIR *dir) {
     } else {
         return 0;
     }
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
 }
 
 extern "C" void rewinddir(DIR *dir) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     dir->rewind();
-#else
-    errno = ENOSYS;
-#endif
 }
 
 extern "C" off_t telldir(DIR *dir) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     return dir->tell();
-#else
-    errno = ENOSYS;
-    return 0;
-#endif
 }
 
 extern "C" void seekdir(DIR *dir, off_t off) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     dir->seek(off);
-#else
-    errno = ENOSYS;
-#endif
 }
 
 extern "C" int mkdir(const char *path, mode_t mode) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     FilePath fp(path);
-    FileSystem *fs = fp.fileSystem();
+    FileSystemHandle *fs = fp.fileSystem();
     if (fs == NULL) return -1;
 
     int err = fs->mkdir(fp.fileName(), mode);
@@ -644,16 +637,11 @@ extern "C" int mkdir(const char *path, mode_t mode) {
     } else {
         return 0;
     }
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
 }
 
 extern "C" int stat(const char *path, struct stat *st) {
-#if MBED_CONF_FILESYSTEM_PRESENT
     FilePath fp(path);
-    FileSystem *fs = fp.fileSystem();
+    FileSystemHandle *fs = fp.fileSystem();
     if (fs == NULL) return -1;
 
     int err = fs->stat(fp.fileName(), st);
@@ -663,10 +651,6 @@ extern "C" int stat(const char *path, struct stat *st) {
     } else {
         return 0;
     }
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
 }
 
 #if defined(TOOLCHAIN_GCC)
@@ -684,79 +668,10 @@ extern "C" WEAK void __cxa_pure_virtual(void) {
 
 #endif
 
-#if defined(TOOLCHAIN_GCC)
-
-#ifdef  FEATURE_UVISOR
-#include "uvisor-lib/uvisor-lib.h"
-#endif/* FEATURE_UVISOR */
-
-
-extern "C" WEAK void software_init_hook_rtos(void)
-{
-    // Do nothing by default.
-}
-
-extern "C" void software_init_hook(void)
-{
-#ifdef   FEATURE_UVISOR
-    int return_code;
-
-    return_code = uvisor_lib_init();
-    if (return_code) {
-        mbed_die();
-    }
-#endif/* FEATURE_UVISOR */
-    mbed_sdk_init();
-    software_init_hook_rtos();
-}
-#endif
-
-// ****************************************************************************
-// mbed_main is a function that is called before main()
-// mbed_sdk_init() is also a function that is called before main(), but unlike
-// mbed_main(), it is not meant for user code, but for the SDK itself to perform
-// initializations before main() is called.
-
-extern "C" WEAK void mbed_main(void);
-extern "C" WEAK void mbed_main(void) {
-}
-
-#if defined(TOOLCHAIN_ARM)
-extern "C" int $Super$$main(void);
-
-extern "C" int $Sub$$main(void) {
-    mbed_main();
-    return $Super$$main();
-}
-
-extern "C" void _platform_post_stackheap_init (void) {
-    mbed_sdk_init();
-}
-
-#elif defined(TOOLCHAIN_GCC)
-extern "C" int __real_main(void);
-
-extern "C" int __wrap_main(void) {
-    mbed_main();
-    return __real_main();
-}
-#elif defined(TOOLCHAIN_IAR)
-// IAR doesn't have the $Super/$Sub mechanism of armcc, nor something equivalent
-// to ld's --wrap. It does have a --redirect, but that doesn't help, since redirecting
-// 'main' to another symbol looses the original 'main' symbol. However, its startup
-// code will call a function to setup argc and argv (__iar_argc_argv) if it is defined.
-// Since mbed doesn't use argc/argv, we use this function to call our mbed_main.
-extern "C" void __iar_argc_argv() {
-    mbed_main();
-}
-#endif
-
 // Provide implementation of _sbrk (low-level dynamic memory allocation
 // routine) for GCC_ARM which compares new heap pointer with MSP instead of
 // SP.  This make it compatible with RTX RTOS thread stacks.
 #if defined(TOOLCHAIN_GCC_ARM) || defined(TOOLCHAIN_GCC_CR)
-// Linker defined symbol used by _sbrk to indicate where heap should start.
-extern "C" int __end__;
 
 #if defined(TARGET_CORTEX_A)
 extern "C" uint32_t  __HeapLimit;
@@ -767,16 +682,18 @@ extern "C" uint32_t  __HeapLimit;
 extern "C" int errno;
 
 // Dynamic memory allocation related syscall.
-#if defined(TARGET_NUMAKER_PFM_NUC472) || defined(TARGET_NUMAKER_PFM_M453)
+#if defined(TARGET_NUVOTON)
 // Overwrite _sbrk() to support two region model (heap and stack are two distinct regions).
 // __wrap__sbrk() is implemented in:
-// TARGET_NUMAKER_PFM_NUC472    hal/targets/cmsis/TARGET_NUVOTON/TARGET_NUC472/TARGET_NUMAKER_PFM_NUC472/TOOLCHAIN_GCC_ARM/retarget.c
-// TARGET_NUMAKER_PFM_M453      hal/targets/cmsis/TARGET_NUVOTON/TARGET_M451/TARGET_NUMAKER_PFM_M453/TOOLCHAIN_GCC_ARM/retarget.c
+// TARGET_NUMAKER_PFM_NUC472    targets/TARGET_NUVOTON/TARGET_NUC472/TARGET_NUMAKER_PFM_NUC472/TOOLCHAIN_GCC_ARM/nuc472_retarget.c
+// TARGET_NUMAKER_PFM_M453      targets/TARGET_NUVOTON/TARGET_M451/TARGET_NUMAKER_PFM_M453/TOOLCHAIN_GCC_ARM/m451_retarget.c
 extern "C" void *__wrap__sbrk(int incr);
 extern "C" caddr_t _sbrk(int incr) {
     return (caddr_t) __wrap__sbrk(incr);
 }
 #else
+// Linker defined symbol used by _sbrk to indicate where heap should start.
+extern "C" uint32_t __end__;
 extern "C" caddr_t _sbrk(int incr) {
     static unsigned char* heap = (unsigned char*)&__end__;
     unsigned char*        prev_heap = heap;
@@ -894,16 +811,38 @@ int __wrap_atexit(void (*func)()) {
 
 namespace mbed {
 
-void mbed_set_unbuffered_stream(FILE *_file) {
+void mbed_set_unbuffered_stream(std::FILE *_file) {
 #if defined (__ICCARM__)
     char buf[2];
-    std::setvbuf(_file,buf,_IONBF,NULL);    
+    std::setvbuf(_file,buf,_IONBF,NULL);
 #else
     setbuf(_file, NULL);
 #endif
 }
 
-int mbed_getc(FILE *_file){
+/* Applications are expected to use fdopen()
+ * not this function directly. This code had to live here because FILE and FileHandle
+ * processes are all linked together here.
+ */
+std::FILE *mbed_fdopen(FileHandle *fh, const char *mode)
+{
+    // This is to avoid scanf(buf, ":%.4s", fh) and the bloat it brings.
+    char buf[1 + sizeof(fh)]; /* :(pointer) */
+    MBED_STATIC_ASSERT(sizeof(buf) == 5, "Pointers should be 4 bytes.");
+    buf[0] = ':';
+    memcpy(buf + 1, &fh, sizeof(fh));
+
+    std::FILE *stream = std::fopen(buf, mode);
+    /* newlib-nano doesn't appear to ever call _isatty itself, so
+     * happily fully buffers an interactive stream. Deal with that here.
+     */
+    if (stream && fh->isatty()) {
+        mbed_set_unbuffered_stream(stream);
+    }
+    return stream;
+}
+
+int mbed_getc(std::FILE *_file){
 #if defined (__ICCARM__)
     /*This is only valid for unbuffered streams*/
     int res = std::fgetc(_file);
@@ -911,14 +850,14 @@ int mbed_getc(FILE *_file){
         _file->_Mode = (unsigned short)(_file->_Mode & ~ 0x1000);/* Unset read mode */
         _file->_Rend = _file->_Wend;
         _file->_Next = _file->_Wend;
-    }    
+    }
     return res;
-#else    
+#else
     return std::fgetc(_file);
-#endif   
+#endif
 }
 
-char* mbed_gets(char*s, int size, FILE *_file){
+char* mbed_gets(char*s, int size, std::FILE *_file){
 #if defined (__ICCARM__)
     /*This is only valid for unbuffered streams*/
     char *str = fgets(s,size,_file);
@@ -928,7 +867,7 @@ char* mbed_gets(char*s, int size, FILE *_file){
         _file->_Next = _file->_Wend;
     }
     return str;
-#else    
+#else
     return std::fgets(s,size,_file);
 #endif
 }
